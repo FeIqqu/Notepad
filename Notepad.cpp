@@ -1,8 +1,11 @@
 #include <iostream>
 #include <string>
+#include <vector>
 #include <fstream>
+#include <filesystem>
 #include <thread>
 #include <ctime>
+#include <windows.h>
 #include "graphics.h"
 
 using namespace std;
@@ -16,13 +19,17 @@ const int indent = 38; // Константа, задающая отступ первой строки документа от 
 int SUM = 0; // Количество символов в документе
 int numline = 0; // Номер строки
 int linelength = 0; // длина строки
+int top = 0, bottom = 27; // Индексы верхней и нижней строки, отображающихся на экране
 int x, y; // Координаты указателя мыши
-int xk = 11, yk = indent, heightk = 15; // Координаты текстовой каретки, её высота
+int xk = width, yk = indent, heightk = 15; // Координаты текстовой каретки, её высота
 int POS = 1; // Позиция текстовой каретки в массиве строк
 bool DOC_MODIFIED = true; // Флаг, отвечающий за то, был ли и изменён файл
-bool flags[6] = {true, true, true, true, true, true}; // Флаги открытия меню и подменю
+HWND hwnd; // Дескриптор активного окна
+string DOC_NAME = "Без имени";
+string DIRECTORY = "";
+bool flags[7] = {true, true, true, true, true, true, true}; // Флаги открытия меню и подменю
 IMAGE *images[26]; // Массив изображений кнопок
-string input[max_lines]; // Массив строк, хранящий весь введённый текст
+vector<string> input(27, ""); // Вектор строк, хранящий весь введённый текст
 //================================================
 
 //=================Прототипы функций================
@@ -40,14 +47,14 @@ void drawtext(); // Вывод последней измененной строки и количества символов на э
 void mouse_thread(); // Поток по определению положения указателя мыши
 void buttons(); // Обработка кнопок программы относительно положения указателя мыши и нажатия ЛКМ
 void savemenu(); // Меню "Сохранить"
-void save(); // Под кнопка "Сохранить"
-void saveas(); // Подменю "Сохранить как"
+int save(); // Функция сохранения документа
+void saveasmenu(); // Подменю "Сохранить как"
 void changemenu(); // Меню "Изменить"
 void findmenu(); // Подменю "Найти"
-void findall(string &str, int &f, int &f_err, int &length, int &xf); // Поиск всех вхождений подстроки str в документе и их подсвечивание
+void findall(string &str, int &f, int &f_err, int &length, int &left, int &xf); // Поиск всех вхождений подстроки str в документе и их подсвечивание
 void replacemenu(); // Подменю "Замена"
-void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int &xf); // Нахождение подстроки и её замена
-void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int &xf); // Нахождение всех подстрок и их замена
+void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int (&left)[2], int &xf); // Нахождение подстроки и её замена
+void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int (&left)[2], int &xf); // Нахождение всех подстрок и их замена
 void aboutmenu(); // Меню "О программе"
 void exit(); // Если нажат крестик
 void exitmenu(); // Меню, вызывающееся при закрытии окна пользователем, если файл не сохранён
@@ -55,7 +62,7 @@ bool AllFlagsTrue(); // Функция для проверки того, все ли флаги в массиве flags 
 bool ValidChar(int ch); // Функция для проверки того, удовлетворяет ли символ вводу
 //================================================
 
-void (*menuFunctions[6])() = {savemenu, changemenu, aboutmenu, findmenu, replacemenu, exitmenu}; // Инициализация массива указателей на функции
+void (*menuFunctions[7])() = {savemenu, changemenu, aboutmenu, findmenu, replacemenu, exitmenu, saveasmenu}; // Инициализация массива указателей на функции
 
 int main(){
    Initializewindow(); // Инициализация окна
@@ -67,7 +74,11 @@ int main(){
 }
 
 void Initializewindow(){
-   initwindow(800, 600, "Блокнот", 100, 100, false, false); // Инициализация окна
+   initwindow(800, 600, "Без имени – Блокнот", 100, 100, false, false); // Инициализация окна
+   hwnd = GetForegroundWindow(); // Получение дескриптора активного окна
+   for(int i = input.size(); i > 1; i--){
+      input.erase(input.begin() + i); // Удаляем строки
+   }
    setfillstyle(SOLID_FILL, LIGHTGRAY, WHITE); // Устанавливаем цвет заполнения и цвет фона
    clearviewport(); // Задание фона
    setcolor(BLACK); // Задание цвета линий
@@ -111,26 +122,26 @@ void HandleInput(int ch){
          DefaultInput(ch);
          break;
    }
+   if(DOC_MODIFIED == false){ // Если файл был изменён
+      string doc_name = DOC_NAME  + "* – Блокнот";
+      SetWindowText(hwnd, doc_name.c_str()); // Установка нового имени окна
+   }
    if(flags[5]) drawtext(); // Вывод последней измененной строки на экран,  количества символов(Если закрыто меню выхода)
 } // Обработка введенной клавиши, с последующим выводом изменённой строки и количества символов на экран
 
 void EnterInput(){
-   if(input[max_lines - 1].empty() && numline < max_lines - 1){ // Если последняя строка пуста и каретка не находится на ней
-      DOC_MODIFIED = false;
-      numline++; // Переходим на следующую строку и увеличиваем значение максимальной задействованной строки
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, indent + (numline - 1)*line_height, 800, 579);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
-      setcolor(BLACK); // Цвет текста
-      for(int i = max_lines - 1; i > numline; i--){
-         input[i] = input[i - 1]; // Переносим все строки ниже текущей строки вниз на одну позицию
-         outtextxy(width, indent + i * line_height, input[i].c_str()); // Выводим строку
-      }
-      input[numline] = input[numline - 1].substr(POS, linelength); // Переносим все символы предыдущей строки, находящиеся справа от каретки, на новую нижнюю строку
-      input[numline - 1] = input[numline - 1].erase(POS, linelength); // Удаляем эти символы из верхней строки
-      outtextxy(width, indent + (numline - 1) * line_height, input[numline - 1].c_str()); // Выводим верхнюю строку
-      xk = width, yk += line_height; // Обновляем значения координат текстовой каретки, чтобы перевести ее на новую строку
+   DOC_MODIFIED = false;
+   numline++; // Переходим на следующую строку
+   xk = width;
+   if(numline == bottom){
+      top++, bottom++;
    }
+   else{
+      yk += line_height; // Обновляем значения координат текстовой каретки, чтобы перевести ее на новую строку
+   }
+   input.insert(input.begin() + numline, ""); // Вставляем новую строку
+   input[numline] = input[numline - 1].substr(POS, linelength); // Переносим все символы предыдущей строки, находящиеся справа от каретки, на новую нижнюю строку
+   input[numline - 1] = input[numline - 1].erase(POS, linelength); // Удаляем эти символы из верхней строки
 } // Если нажата клавиша "Enter"
 
 void BackspaceInput(){
@@ -138,26 +149,25 @@ void BackspaceInput(){
       DOC_MODIFIED = false;
       SUM--;
       input[numline].erase(POS - 1, 1); // Удаляем символ из строки
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, indent + numline * line_height, 800, indent + (numline + 1) * line_height);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
       xk -= width; // Перемещаем текстовую каретку
    }
-   else if(numline > 0){ // Если каретка находится в крайней левой позиции в строке и не находится на первой строке
+   else if(numline > 0){
       DOC_MODIFIED = false;
-      numline--; // Переходим на предыдущую строку
-      linelength = input[numline].length(); // Получаем длину предыдущей строки
-      input[numline] = input[numline] + input[numline + 1].substr(0,  max_length - linelength); // Добавляем к верхней строке часть, которая может в ней уместиться от нижней строки
-      input[numline + 1].erase(0,  max_length - linelength); // Удаляем эту часть от нижней строки
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, indent + numline*line_height, 800, 579);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
-      setcolor(BLACK); // Цвет текста
-      for(int i = numline + 1; i < max_lines; i++){ // Переносим и выводим все строки ниже текущей строки вниз на одну позицию
-         input[i] = input[i + 1];
-         outtextxy(width, indent + i * line_height, input[i].c_str());
+      if(numline != top){
+         numline--; // Переходим на предыдущую строку
+         linelength = input[numline].length(); // Получаем длину предыдущей строки
+         input[numline] = input[numline] + input[numline + 1].substr(0,  max_length - linelength); // Добавляем к верхней строке часть, которая может в ней уместиться от нижней строки
+         input.erase(input.begin() + numline + 1); // Удаляем строку
+         xk = width + linelength * width, yk -= line_height; // Перемещаем текстовую каретку
       }
-      xk = width + linelength*width, yk -= line_height; // Перемещаем текстовую каретку
+      else{
+         numline--; // Переходим на предыдущую строку
+         top--, bottom--;
+         linelength = input[numline].length(); // Получаем длину предыдущей строки
+         input[numline] = input[numline] + input[numline + 1].substr(0,  max_length - linelength); // Добавляем к верхней строке часть, которая может в ней уместиться от нижней строки
+         input.erase(input.begin() + numline + 1); // Удаляем строку
+         xk = width + linelength * width; // Перемещаем текстовую каретку
+      }
    }
 } // Если нажата клавиша "Backspace"
 
@@ -168,7 +178,13 @@ void LeftInput(){
    else if(numline > 0){ // Если текущая позиция каретки является самой левой в строке и она не первая
       numline--; // Переходим на предыдущую строку
       linelength = input[numline].length(); // Получаем длину предыдущей строки
-      xk = width + linelength*width, yk -= line_height; // Перемещаем текстовую каретку
+      xk = width + linelength * width; // Перемещаем текстовую каретку
+      if(numline + 1 != top){
+         yk -= line_height; // Перемещаем текстовую каретку
+      }
+      else{
+         top--, bottom--;
+      }
    }
 } // Если нажата стрелка влево
 
@@ -176,36 +192,66 @@ void RightInput(){
    if(POS < linelength){ // Если текущая позиция каретки не является самой правой в строке
       xk += width; // Перемещаем текстовую каретку
    }
-   else if(numline < max_lines - 1){ // Если текущая позиция каретки не является самой правой в строке, строка не последняя и нижняя строка не пуста
-      numline++;
-      xk = width, yk += line_height; // Перемещаем текстовую каретку
+   else if(numline < static_cast<int>(input.size()) - 1){ // Если текущая позиция каретки является самой правой в строке и она не последняя
+      numline++; // Переходим на следующую строку
+      xk = width; // Перемещаем текстовую каретку
+      if(numline != bottom){
+         yk += line_height; // Перемещаем текстовую каретку
+      }
+      else{
+         top++, bottom++;
+      }
    }
 } // Если нажата стрелка вправо
 
 void UpInput(){
-   if(numline > 0){ // Если каретка не находится на самой первой строке
+   if(numline > 0){
       int length_top_string = input[numline - 1].length(); // Вычисляем длину верхней строки
-      if(POS <= length_top_string){ // Если на верхней строке есть место для перемещения каретки
-         numline--;
-         yk -= line_height; // Перемещаем текстовую каретку
+      if(numline != top){ // Если каретка не находится на самой верхней отображаемой строке
+         if(POS <= length_top_string){ // Если на верхней строке есть место для перемещения каретки
+            numline--;
+            yk -= line_height; // Перемещаем текстовую каретку
+         }
+         else if(linelength >= length_top_string){ // Если на верхней строке нет места для перемещения каретки
+            numline--;
+            xk = width + length_top_string * width, yk -= line_height; // Перемещаем каретку в конец верхней строки
+         }
       }
-      else if(linelength >= length_top_string){ // Если на верхней строке нет места для перемещения каретки
-         numline--;
-         xk = width + length_top_string*width, yk -= line_height; // Перемещаем каретку в конец верхней строки
+      else{ // Если каретка находится на самой верхней отображаемой строке
+         top--, bottom--;
+         if(POS <= length_top_string){ // Если на верхней строке есть место для перемещения каретки
+            numline--;
+         }
+         else if(linelength >= length_top_string){ // Если на верхней строке нет места для перемещения каретки
+            numline--;
+            xk = width + length_top_string * width; // Перемещаем каретку в конец верхней строки
+         }
       }
    }
 } // Если нажата стрелка вверх
 
 void DownInput(){
-   if(numline < max_lines - 1){ // Если каретка не находится на самой последней строке
+   if(numline < static_cast<int>(input.size() - 1)){
       int length_bottom_string = input[numline + 1].length(); // Вычисляем длину нижней строки
-      if(POS <= length_bottom_string){ // Если на нижней строке есть место для перемещения каретки
-         numline++; // Переходим на следующую строку
-         yk += line_height; // Перемещаем текстовую каретку
+      if(numline != bottom - 1){ // Если каретка не находится на самой нижней отображаемой строке
+         if(POS <= length_bottom_string){ // Если на нижней строке есть место для перемещения каретки
+            numline++; // Переходим на следующую строку
+            yk += line_height; // Перемещаем текстовую каретку
+         }
+         else if(linelength >= length_bottom_string){ // Если на нижней строке нет места для перемещения каретки
+            numline++;
+            xk = width + length_bottom_string * width, yk += line_height; // Перемещаем каретку в конец нижней строки
+         }
       }
-      else if(linelength >= length_bottom_string){ // Если на нижней строке нет места для перемещения каретки
-         numline++;
-         xk = width + length_bottom_string*width, yk += line_height; // Перемещаем каретку в конец нижней строки
+      else{ // Если каретка находится на самой нижней отображаемой строке
+         top++, bottom++;
+         if(POS <= length_bottom_string){ // Если на нижней строке есть место для перемещения каретки
+            numline++;
+         }
+         else if(linelength >= length_bottom_string){ // Если на нижней строке нет места для перемещения каретки
+            numline++;
+            xk = width + length_bottom_string * width; // Перемещаем каретку в конец нижней строки
+         }
       }
    }
 } // Если нажата стрелка вниз
@@ -218,33 +264,35 @@ void DefaultInput(int ch){
          input[numline].insert(POS, 1, ch); // Вставляем символ в строку на позицию каретки
          xk += width; // Перемещаем текстовую каретку
       }
-      else if(input[max_lines - 1].empty() && numline < max_lines - 1 && POS == linelength){ // Если последняя строка пуста и каретка находится в конце строки, но не последней
+      else if(linelength == POS){
          DOC_MODIFIED = false;
          SUM++; // Увеличиваем значение количества символов в документе
          numline++; // Переходим на следующую строку
-         setfillstyle(SOLID_FILL, WHITE);
-         bar(0, indent + numline*line_height, 800, 579);
-         setfillstyle(SOLID_FILL, LIGHTGRAY);
-         setcolor(BLACK); // Цвет текста
-         for(int i = max_lines - 1; i > numline; i--){ // Переносим и выводим все строки ниже текущей строки вниз на одну позицию
-            input[i] = input[i - 1];
-            outtextxy(width, indent + i * line_height, input[i].c_str());
+         xk = width * 2; // Перемещаем текстовую каретку
+         if(numline == bottom){
+            top++, bottom++;
          }
-         input[numline] = ""; // Очищаем текущую строку
+         else{
+            yk += line_height; // Обновляем значения координат текстовой каретки, чтобы перевести ее на новую строку
+         }
+         input.insert(input.begin() + numline, ""); // Вставляем новую строку
          input[numline].push_back(ch); // Добавляем символ в конец новой строки
-         xk = width * 2, yk += line_height; // Перемещаем текстовую каретку
       }
    }
 } // Если нажата другая клавиша
 
 void drawtext(){
-   setcolor(BLACK); // Цвет текста
-   outtextxy(width, indent + numline * line_height, input[numline].c_str()); // Выводим последнюю изменённую строку
    char str1[20]; sprintf(str1, "Количество: %d, ", SUM); // Записываем "Количество: SUM, " как строку
    char str2[15]; sprintf(str2, "строка: %d", numline + 1); // Записываем  "строка: numline + 1" как строку
+   setcolor(BLACK); // Цвет текста
    setfillstyle(SOLID_FILL, WHITE);
-   bar(0, 581, 400, 600);
+   bar(0, 31, 800, 579), bar(0, 581, 400, 600);
    setfillstyle(SOLID_FILL, LIGHTGRAY);
+   int j = 0;
+   for(int i = top; i < bottom; i++){
+      if(!input[i].empty()) outtextxy(width, indent + j * line_height, input[i].c_str()); // Выводим весь видимый текст
+      j++;
+   }
    outtextxy(width, 581, str1), outtextxy(width + textwidth(str1), 581, str2); // Выводим количество символов и номер текущей строки
 } // Вывод последней измененной строки и количества символов на экран
 
@@ -270,6 +318,27 @@ void buttons(){
                }
             }
          }
+         if(ym > 30 && ym < 580){ // Если нажата в области текста
+            setcolor(WHITE); // Цвет фона
+            line(xk, yk, xk, yk + heightk); // Стираем каретку
+            setcolor(BLACK); // Возвращаем цвет каретки
+            if((ym - 30) / line_height + top < static_cast<int>(input.size())){
+               numline = (ym - 30) / line_height + top;
+               xm -= xm % width;
+               if(xm < width + static_cast<int>(input[numline].length()) * width) xk = width + xm;
+               else xk = width + input[numline].length() * width;
+            }
+            else{
+               numline = input.size() - 1;
+               xk = width + input[numline].length() * width;
+            }
+            yk = indent + (numline - top) * line_height;
+            line(xk, yk, xk, yk + heightk); // Рисуем каретку
+            setfillstyle(SOLID_FILL, WHITE), bar(0, 581, 400, 600), setfillstyle(SOLID_FILL, LIGHTGRAY);
+            char str1[20]; sprintf(str1, "Количество: %d, ", SUM); // Записываем "Количество: SUM, " как строку
+            char str2[15]; sprintf(str2, "строка: %d", numline + 1); // Записываем  "строка: numline + 1" как строку
+            outtextxy(width, 581, str1), outtextxy(width + textwidth(str1), 581, str2); // Выводим количество символов и номер текущей строки
+         }
       }
       for(int i = 0; i < 3; i++){
          if(x >= buttonbounds[i][0] && x <= buttonbounds[i][1] && y >= buttonbounds[i][2] && y <= buttonbounds[i][3] && state[i] == 0){
@@ -282,7 +351,7 @@ void buttons(){
          }
       }
    }
-   for(int i = 0; i < 6; i++){
+   for(int i = 0; i < 7; i++){
       if(flags[i] == 0){
          menuFunctions[i](); // Вызываем функцию соответствующего меню, если оно открыто
          break;
@@ -292,6 +361,7 @@ void buttons(){
 
 void savemenu(){
    static int state[2] = {0, 0}, f = 0; // Начальные состояния и флаг, отвечающий за то, было ли отрисовано меню
+   static int fs = 0; // Флаг, отвечающий за то, чтобы при первом использовании кнопки "Сохранить" вызывалось меню "Сохранить как"
    int buttonbounds[2][4] = {{0, 31, 115, 60}, {0, 61, 115, 90}}; // Границы под кнопок
    int xm, ym; // Запоминаем координаты места нажатия ЛКМ
    if(f == 0){
@@ -301,18 +371,16 @@ void savemenu(){
    if(ismouseclick(WM_LBUTTONDOWN)){ // Проверяем, было ли произведено нажатие на ЛКМ
       getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
       flags[0] = 1, f = 0;
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, 31, 800, 31 + 3 * line_height);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
-      for(int i = 0; i < 3; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
+      drawtext();
       for(int i = 0; i < 2; i++){
          if(xm >= buttonbounds[i][0] && xm <= buttonbounds[i][2] && ym >= buttonbounds[i][1] && ym <= buttonbounds[i][3]){
             switch(i){
                case 0:
-                  save(); // Под кнопка "Сохранить"
+                  if(fs) save(); // Под кнопка "Сохранить" 
+                  else fs = 1, saveasmenu(); // Меню "Сохранить как"
                   break;
                case 1:
-                  saveas(); // Под кнопка "Сохранить как"
+                  fs = 1, saveasmenu(); // Под кнопка "Сохранить как"
                   break;
             }
          }
@@ -332,24 +400,169 @@ void savemenu(){
    }
 } // Меню "Сохранить"
 
-void save(){
-   DOC_MODIFIED = true;
-   ofstream file("output.txt");
-   int last_non_empty_line = max_lines - 1;
-   for(int i = max_lines - 1; i >= 0; i--){
+int save(){
+   string FILEPATH = DIRECTORY + DOC_NAME + ".txt";
+   if(!DIRECTORY.empty() && !filesystem::is_directory(DIRECTORY)) return 3;
+   ofstream file(FILEPATH);
+   int last_non_empty_line = input.size();
+   int f = 0;
+   for(int i = input.size() - 1; i >= 0; i--){
       if(!input[i].empty()){
-          last_non_empty_line = i;
-          break;
+         last_non_empty_line = i;
+         f = 1;
+         break;
       }
    }
-   for(int i = 0; i <= last_non_empty_line ; i++){
-      if(!input[i].empty()) file << input[i] << endl;
-      else file << "" << endl;
+   if(f == 0) last_non_empty_line = 0;
+   for(int i = 0; i <= last_non_empty_line; i++){
+      file << input[i] << endl;
    }
    file.close();
-} // Под кнопка "Сохранить"
+   if(file.fail()) return 2;
+   DOC_MODIFIED = true;
+   string doc_name = DOC_NAME  + " – Блокнот";
+   SetWindowText(hwnd, doc_name.c_str()); // Установка нового имени окна
+   return 1;
+} // Функция сохранения документа
 
-void saveas(){} // Под меню "Сохранить как"
+void saveasmenu(){
+   static int state[3] = {0, 0, 0}, f = 0, f_err = 0; // Начальные состояния и флаги, отвечающие за то, было ли отрисовано меню
+   static int fstr = 0; // Флаг, отвечающий за то, в каком поле происходит запись
+   static string str1, str2; // Строки полей меню "Сохранить как"
+   string& selectedstring = fstr ? str2 : str1;
+   static int length = 0;
+   static int left[2] = {0, 0}; // Индексы отображаемой строки
+   static int xf = 271; // Координата текстовой каретки
+   int buttonbounds[4][4] = {{555, 81, 600, 105}, {210, 175, 330, 194}, {265, 115, 582, 135}, {265, 145, 582, 165}}; // Границы под кнопок и полей ввода
+   int xm, ym; // Запоминаем координаты места нажатия ЛКМ
+   if(f == 0){
+      flags[6] = 0, f = 1;
+      setfillstyle(SOLID_FILL, WHITE);
+      bar(200, 80, 600, 205);
+      setfillstyle(SOLID_FILL, LIGHTGRAY);
+      putimage(56, 0, images[2], COPY_PUT);
+      rectangle(200, 80, 600, 205), setcolor(COLOR(2, 224, 202)), rectangle(265, 115, 582, 135), setcolor(BLACK), rectangle(265, 145, 582, 165); // Отрисовка окна меню и полей ввода
+      putimage(555, 81, images[14]), putimage(210, 175, images[22]);
+      outtextxy(210, 90, "Сохранить как"), outtextxy(207, 117, "Имя:"), outtextxy(207, 147, "Путь:");
+      line(xf, 117, xf, 132); // Рисуем каретку
+   }
+   if(kbhit()){ // Если нажата клавиша
+      int ch = getch(1); //Запоминаем нажатую клавишу
+      int pos = left[fstr] + (xf - 271) / width;
+      int f2 = 0;
+      if(ch == KEY_BACKSPACE && pos > 0){ // Если нажата клавиша "Backspace" и каретка не находится в крайней левой позиции строки
+         if(pos == left[fstr]){ // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста
+            selectedstring.erase(pos - 1, 1);
+            left[fstr]--;
+         }
+         else{
+            selectedstring.erase(pos - 1, 1);
+            xf -= width;
+         }
+         length--, f2 = 1;
+      }
+      else if(ch == static_cast<int>(KEY_LEFT) + static_cast<int>(KEY_SPECIAL) && pos > 0){
+         if(pos == left[fstr]) left[fstr]--; // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста левее
+         else xf -= width;
+      }
+      else if(ch == static_cast<int>(KEY_RIGHT) + static_cast<int>(KEY_SPECIAL) && pos < length){
+         if(pos == left[fstr] + 28) left[fstr]++; // Если каретка находится в крайней правой позиции отображаемой строки, а сама строка не пуста правее
+         else xf += width;
+      }
+      else if(ValidChar(ch)){ // Если символ подходит
+         if(selectedstring.substr(left[fstr], 28).length() < 28){ // Если длина текущей строки не превышает ограничение
+            selectedstring.insert(pos, 1, ch);
+            xf += width;
+         }
+         else{ // Если длина текущей строки превышает ограничение
+            selectedstring.insert(pos, 1, ch);
+            left[fstr]++;
+         }
+         length++, f2 = 1;
+      }
+      if(f_err && f2){
+         f_err = 0;
+         setcolor(COLOR(2, 224, 202)), rectangle(265, fstr ? 145 : 115, 582, fstr ? 165 : 135), setcolor(BLACK);
+         setfillstyle(SOLID_FILL, WHITE), bar(331, 166, 599, 204), setfillstyle(SOLID_FILL, LIGHTGRAY);
+      }
+      setfillstyle(SOLID_FILL, WHITE);
+      bar(266, fstr ? 146 : 116, 581, fstr ? 164 : 134);
+      setfillstyle(SOLID_FILL, LIGHTGRAY);
+      outtextxy(270, fstr ? 147 : 117, selectedstring.substr(left[fstr], 28).c_str()); // Выводим строку
+      line(xf, fstr ? 147 : 117, xf, fstr ? 162 : 132); // Рисуем каретку
+   }
+   if(ismouseclick(WM_LBUTTONDOWN)){ // Проверяем, было ли произведено нажатие на ЛКМ
+      getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
+      if(xm >= buttonbounds[0][0] && xm <= buttonbounds[0][2] && ym >= buttonbounds[0][1] && ym <= buttonbounds[0][3]){ // Если нажат крестик
+         flags[6] = 1, f = 0, fstr = 0;
+         str1 = "", str2 = "", left[0] = 0, left[1] = 0, length = 0, xf = 271; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
+         drawtext();
+      }
+      else if(xm >= buttonbounds[2][0] && xm <= buttonbounds[2][2] && ym >= buttonbounds[2][1] && ym <= buttonbounds[2][3]){ // Если нажата в районе поля "Имя:"
+         fstr = 0;
+         setcolor(COLOR(2, 224, 202)), rectangle(265, 115, 582, 135), setcolor(BLACK), rectangle(265, 145, 582, 165);
+         setfillstyle(SOLID_FILL, WHITE), bar(331, 166, 599, 204), setfillstyle(SOLID_FILL, LIGHTGRAY);
+         setcolor(WHITE), line(xf, 147, xf, 162), line(xf, 117, xf, 132), setcolor(BLACK); // Стираем каретку
+         outtextxy(270, 117, str1.substr(left[fstr], 28).c_str()); // Выводим строку
+         length = str1.length();
+         xm -= (xm - 271) % width;
+         if(xm < 271 + static_cast<int>(str1.substr(left[fstr], 28).length()) * width) xf = xm;
+         else xf = 271 + static_cast<int>(str1.substr(left[fstr], 28).length()) * width;
+         line(xf, 117, xf, 132); // Перемещаем каретку
+      }
+      else if(xm >= buttonbounds[3][0] && xm <= buttonbounds[3][2] && ym >= buttonbounds[3][1] && ym <= buttonbounds[3][3]){ // Если нажата в районе поля "Путь:"
+         fstr = 1;
+         setcolor(COLOR(2, 224, 202)), rectangle(265, 145, 582, 165), setcolor(BLACK), rectangle(265, 115, 582, 135);
+         setfillstyle(SOLID_FILL, WHITE), bar(331, 166, 599, 204), setfillstyle(SOLID_FILL, LIGHTGRAY);
+         setcolor(WHITE), line(xf, 117, xf, 132), line(xf, 147, xf, 162), setcolor(BLACK); // Стираем каретку
+         outtextxy(270, 147, str2.substr(left[fstr], 28).c_str()); // Выводим строку
+         length = str2.length();
+         xm -= (xm - 271) % width;
+         if(xm < 271 + static_cast<int>(str2.substr(left[fstr], 28).length()) * width) xf = xm;
+         else xf = 271 + static_cast<int>(str2.substr(left[fstr], 28).length()) * width;
+         line(xf, 147, xf, 162); // Перемещаем каретку
+      }
+      else{
+         if(xm >= buttonbounds[1][0] && xm <= buttonbounds[1][2] && ym >= buttonbounds[1][1] && ym <= buttonbounds[1][3]){
+            if(!str1.empty()){ // Если строка с названием файла не пуста
+               DOC_NAME = str1, DIRECTORY = str2;
+               int i = save();
+               if(i == 1){
+                  flags[6] = 1, f = 0, fstr = 0;
+                  str1 = "", str2 = "", left[0] = 0, left[1] = 0, length = 0, xf = 271; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
+                  drawtext();
+               }
+               else{
+                  f_err = 1;
+                  setcolor(COLOR(255, 0, 0));
+                  if(i == 3) outtextxy(360, 175, "Некорректный путь");
+                  else outtextxy(360, 175, "Ошибка сохранения");
+                  DOC_NAME = "Без имени", DIRECTORY = "";
+                  setcolor(BLACK);
+               }
+            }
+            else{
+               f_err = 1;
+               setcolor(COLOR(255, 0, 0)), outtextxy(360, 175, "Введите имя файла"), rectangle(265, 115, 582, 135), setcolor(BLACK);
+            }
+         }
+      }
+   }
+   for(int i = 0; i < 2; i++){
+      if(x >= buttonbounds[i][0] && x <= buttonbounds[i][2] && y >= buttonbounds[i][1] && y <= buttonbounds[i][3]){
+         if(!state[i]){ // Если мы только что зашли в зону под кнопки
+            if(i == 0) putimage(buttonbounds[i][0], buttonbounds[i][1], images[15], COPY_PUT); // Заменяем изображение на другое
+            else putimage(buttonbounds[i][0], 175, images[(i - 1)*2 + 23], COPY_PUT); // Заменяем изображение на другое
+            state[i] = 1; // Установим флаг, что курсор мыши находится в зоне под кнопки
+         }
+      }
+      else if(state[i]){ // Если мы только что вышли курсором из зоны под кнопки
+         if(i == 0) putimage(buttonbounds[i][0], buttonbounds[i][1], images[14], COPY_PUT);  // Восстанавливаем исходное изображение
+         else putimage(buttonbounds[i][0], 175, images[(i - 1)*2 + 22], COPY_PUT);  // Восстанавливаем исходное изображение
+         state[i] = 0; // Сбрасываем флаг, что курсор мыши находится в зоне под кнопки
+      }
+   }
+} // Меню "Сохранить как"
 
 void changemenu(){
    static int state[2] = {0, 0}, f = 0; // Начальные состояния и флаг, отвечающий за то, было ли отрисовано меню
@@ -362,10 +575,7 @@ void changemenu(){
    if(ismouseclick(WM_LBUTTONDOWN)){
       getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
       flags[1] = 1, f = 0;
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, 31, 800, 31 + 3 * line_height);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
-      for(int i = 0; i < 3; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
+      drawtext();
       for(int i = 0; i < 2; i++){
          if(xm >= buttonbounds[i][0] && xm <= buttonbounds[i][2] && ym >= buttonbounds[i][1] && ym <= buttonbounds[i][3]){
             switch(i){
@@ -397,60 +607,84 @@ void findmenu(){
    static int state[2] = {0, 0}, f = 0, f_err = 0; // Начальные состояния и флаги, отвечающие за то, было ли отрисовано меню
    static string str; // Строка поля меню "Найти"
    static int length = 0;
+   static int left = 0; // Индекс отображаемой строки
    static int xf = 261; // Координата текстовой каретки
-   int buttonbounds[2][4] = {{555, 81, 600, 105}, {210, 145, 330, 165}}; // Границы под кнопок
+   int buttonbounds[3][4] = {{555, 81, 600, 105}, {210, 145, 330, 165}, {255, 115, 582, 135}}; // Границы под кнопок
    int xm, ym; // Запоминаем координаты места нажатия ЛКМ
-   cout << f_err << endl;
    if(f == 0){
       flags[3] = 0, f = 1;
       setfillstyle(SOLID_FILL, WHITE);
       bar(200, 80, 600, 175);
       setfillstyle(SOLID_FILL, LIGHTGRAY);
       putimage(56, 0, images[2], COPY_PUT);
-      rectangle(200, 80, 600, 175), rectangle(255, 115, 582, 135); // Отрисовка окна меню и поля ввода
+      rectangle(200, 80, 600, 175), setcolor(COLOR(2, 224, 202)), rectangle(255, 115, 582, 135), setcolor(BLACK); // Отрисовка окна меню и поля ввода
       line(xf, 117, xf, 132); // Рисуем каретку
       putimage(555, 81, images[14]), putimage(210, 145, images[16]);
       outtextxy(210, 90, "Найти"), outtextxy(210, 117, "Что:");
    }
    if(kbhit()){ // Если нажата клавиша
       int ch = getch(1); //Запоминаем нажатую клавишу
-      int pos = (xf - 261) / width;
+      int pos = left + (xf - 261) / width;
       int f2 = 0;
       if(ch == KEY_BACKSPACE && pos > 0){ // Если нажата клавиша "Backspace" и каретка не находится в крайней левой позиции строки
-         str.erase(pos - 1, 1);
-         length--, xf -= width, f2 = 1;
+         if(pos == left){ // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста
+            str.erase(pos - 1, 1);
+            left--;
+         }
+         else{
+            str.erase(pos - 1, 1);
+            xf -= width;
+         }
+         length--, f2 = 1;
       }
-      else if(ch == static_cast<int>(KEY_LEFT) + static_cast<int>(KEY_SPECIAL) && pos > 0) xf -= width;
-      else if(ch == static_cast<int>(KEY_RIGHT) + static_cast<int>(KEY_SPECIAL) && pos < length) xf += width;
-      else if(ValidChar(ch) && length < 29){ // Если символ подходит и длина текущей строки не превышает ограничение
-         str.insert(pos, 1, ch);
-         length++, xf += width, f2 = 1;
+      else if(ch == static_cast<int>(KEY_LEFT) + static_cast<int>(KEY_SPECIAL) && pos > 0){
+         if(pos == left) left--; // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста левее
+         else xf -= width;
+      }
+      else if(ch == static_cast<int>(KEY_RIGHT) + static_cast<int>(KEY_SPECIAL) && pos < length){
+         if(pos == left + 29) left++; // Если каретка находится в крайней правой позиции отображаемой строки, а сама строка не пуста правее
+         else xf += width;
+      }
+      else if(ValidChar(ch)){ // Если символ подходит
+         if(str.substr(left, 29).length() < 29){ // Если длина текущей строки не превышает ограничение
+            str.insert(pos, 1, ch);
+            xf += width;
+         }
+         else{ // Если длина текущей строки превышает ограничение
+            str.insert(pos, 1, ch);
+            left++;
+         }
+         length++, f2 = 1;
       }
       if(f_err && f2){ // Если при отрисованном сообщении об ошибке происходит изменение строки
          f_err = 0;
-         rectangle(255, 115, 582, 135);
-         setfillstyle(SOLID_FILL, WHITE);
-         bar(360, 140, 550, 170);
-         setfillstyle(SOLID_FILL, LIGHTGRAY);
+         setcolor(COLOR(2, 224, 202)), rectangle(255, 115, 582, 135), setcolor(BLACK);
+         setfillstyle(SOLID_FILL, WHITE), bar(360, 140, 550, 170), setfillstyle(SOLID_FILL, LIGHTGRAY);
       }
       setfillstyle(SOLID_FILL, WHITE);
       bar(256, 116, 581, 134);
       setfillstyle(SOLID_FILL, LIGHTGRAY);
-      outtextxy(260, 117, str.c_str()); // Выводим строку
+      outtextxy(260, 117, str.substr(left, 29).c_str()); // Выводим строку
       line(xf, 117, xf, 132); // Рисуем каретку
    }
    if(ismouseclick(WM_LBUTTONDOWN)){ // Проверяем, было ли произведено нажатие на ЛКМ
       getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
-      if(xm > buttonbounds[0][0] && xm < buttonbounds[0][2] && ym > buttonbounds[0][1] && ym < buttonbounds[0][3]){ // Если нажат крестик
+      if(xm >= buttonbounds[0][0] && xm <= buttonbounds[0][2] && ym >= buttonbounds[0][1] && ym <= buttonbounds[0][3]){ // Если нажат крестик
          flags[3] = 1, f = 0;
-         str = "", length = 0, xf = 261; // Очищаем строку поиска, обнуляем её длину и переносим каретку в начало строки
-         setfillstyle(SOLID_FILL, WHITE);
-         bar(200, 80, 600, 175);
-         setfillstyle(SOLID_FILL, LIGHTGRAY);
-         for(int i = 2; i < 7; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
+         str = "", left = 0, length = 0, xf = 261; // Очищаем строку поиска, обнуляем её длину и переносим каретку в начало строки
+         drawtext();
+      }
+      else if(xm >= buttonbounds[2][0] && xm <= buttonbounds[2][2] && ym >= buttonbounds[2][1] && ym <= buttonbounds[2][3]){ // Если нажата в районе поля ввода
+         setcolor(COLOR(2, 224, 202)), rectangle(255, 115, 582, 135), setcolor(BLACK);
+         setfillstyle(SOLID_FILL, WHITE), bar(360, 140, 550, 170), setfillstyle(SOLID_FILL, LIGHTGRAY);
+         setcolor(WHITE), line(xf, 117, xf, 132), setcolor(BLACK); // Стираем каретку
+         xm -= (xm - 261) % width;
+         if(xm < 261 + static_cast<int>(str.substr(left, 29).length()) * width) xf = xm;
+         else xf = 261 + static_cast<int>(str.substr(left, 29).length()) * width;
+         line(xf, 117, xf, 132); // Рисуем каретку
       }
       else if(xm >= buttonbounds[1][0] && xm <= buttonbounds[1][2] && ym >= buttonbounds[1][1] && ym <= buttonbounds[1][3]){ // Если нажата кнопка "Найти все"
-         if(!str.empty()) findall(str, f, f_err, length, xf); // Поиск всех вхождений подстроки str в документе и их подсвечивание
+         if(!str.empty()) findall(str, f, f_err, length, left, xf); // Поиск всех вхождений подстроки str в документе и их подсвечивание
       }
    }
    for(int i = 0; i < 2; i++){
@@ -469,23 +703,22 @@ void findmenu(){
    }
 } // Подменю "Найти"
 
-void findall(string &str, int &f, int &f_err, int &length, int &xf){
+void findall(string &str, int &f, int &f_err, int &length, int &left, int &xf){
    bool f1 = false; // Флаг, отвечающий за то, найдено ли хоть одно вхождение подстроки в документе
    int strlength = str.size();
-   for(int i = 0; i < max_lines; i++){ // Проходим по всем строкам документа
+   int index = 0;
+   for(int i = top; i < bottom; i++){ // Проходим по всем видимым строкам документа
       size_t pos = 0;
       while((pos = input[i].find(str, pos)) != string::npos){
          if(f1 == false){
             f1 = true;
-            setfillstyle(SOLID_FILL, WHITE);
-            bar(200, 80, 600, 175);
-            setfillstyle(SOLID_FILL, LIGHTGRAY);
-            for(int j = 2; j < 7; j++) outtextxy(width, indent + j * line_height, input[j].c_str()); // Возвращаем текст, перекрытый меню
+            drawtext();
             setbkcolor(LIGHTGRAY); // Меняем фон текста
          }
-         outtextxy((pos + 1)*width, indent + i * line_height, str.c_str()); // Выводим найденную подстроку
+         outtextxy((pos + 1) * width, indent + index * line_height, str.c_str()); // Выводим найденную подстроку
          pos += strlength;
       }
+      index++;
    }
    if(f1){
       setbkcolor(WHITE); // Меняем фон текста
@@ -495,11 +728,8 @@ void findall(string &str, int &f, int &f_err, int &length, int &xf){
          delay(5); // Задержка выполнения цикла
       }
       flags[3] = 1, f = 0;
-      str = "", length = 0, xf = 261; // Очищаем строку поиска, обнуляем её длину и переносим каретку в начало строки
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, 31, 800, 579);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
-      for(int i = 0; i < max_lines; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст
+      str = "", length = 0, left = 0, xf = 261; // Очищаем строку поиска, обнуляем её длину и переносим каретку в начало строки
+      drawtext();
    }
    else{
       findmenu();
@@ -516,6 +746,7 @@ void replacemenu(){
    static string str1, str2; // Строки полей меню "Замена"
    string& selectedstring = fstr ? str2 : str1;
    static int length = 0;
+   static int left[2] = {0, 0}; // Индексы отображаемой строки
    static int xf = 261; // Координата текстовой каретки
    int buttonbounds[5][4] = {{555, 81, 600, 105}, {210, 175, 330, 194}, {340, 175, 460, 194}, {255, 115, 582, 135}, {255, 145, 582, 165}}; // Границы под кнопок и полей ввода
    int xm, ym; // Запоминаем координаты места нажатия ЛКМ
@@ -525,57 +756,83 @@ void replacemenu(){
       bar(200, 80, 600, 205);
       setfillstyle(SOLID_FILL, LIGHTGRAY);
       putimage(56, 0, images[2], COPY_PUT);
-      rectangle(200, 80, 600, 205), rectangle(255, 115, 582, 135), rectangle(255, 145, 582, 165); // Отрисовка окна меню и полей ввода
+      rectangle(200, 80, 600, 205), setcolor(COLOR(2, 224, 202)), rectangle(255, 115, 582, 135), setcolor(BLACK), rectangle(255, 145, 582, 165); // Отрисовка окна меню и полей ввода
       putimage(555, 81, images[14]), putimage(210, 175, images[18]), putimage(340, 175, images[20]);
       outtextxy(210, 90, "Замена"), outtextxy(210, 117, "Что:"), outtextxy(210, 147, "Чем:");
       line(xf, 117, xf, 132); // Рисуем каретку
    }
    if(kbhit()){ // Если нажата клавиша
       int ch = getch(1); //Запоминаем нажатую клавишу
-      int pos = (xf - 261) / width;
+      int pos = left[fstr] + (xf - 261) / width;
       int f2 = 0;
       if(ch == KEY_BACKSPACE && pos > 0){ // Если нажата клавиша "Backspace" и каретка не находится в крайней левой позиции строки
-         selectedstring.erase(pos - 1, 1);
-         length--, xf -= width, f2 = 1;
+         if(pos == left[fstr]){ // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста
+            selectedstring.erase(pos - 1, 1);
+            left[fstr]--;
+         }
+         else{
+            selectedstring.erase(pos - 1, 1);
+            xf -= width;
+         }
+         length--, f2 = 1;
       }
-      else if(ch == static_cast<int>(KEY_LEFT) + static_cast<int>(KEY_SPECIAL) && pos > 0) xf -= width;
-      else if(ch == static_cast<int>(KEY_RIGHT) + static_cast<int>(KEY_SPECIAL) && pos < length) xf += width;
-      else if(ValidChar(ch) && length < 29){ // Если символ подходит и длина текущей строки не превышает ограничение
-         selectedstring.insert(pos, 1, ch);
-         length++, xf += width, f2 = 1;
+      else if(ch == static_cast<int>(KEY_LEFT) + static_cast<int>(KEY_SPECIAL) && pos > 0){
+         if(pos == left[fstr]) left[fstr]--; // Если каретка находится в крайней левой позиции отображаемой строки, а сама строка не пуста левее
+         else xf -= width;
+      }
+      else if(ch == static_cast<int>(KEY_RIGHT) + static_cast<int>(KEY_SPECIAL) && pos < length){
+         if(pos == left[fstr] + 29) left[fstr]++; // Если каретка находится в крайней правой позиции отображаемой строки, а сама строка не пуста правее
+         else xf += width;
+      }
+      else if(ValidChar(ch)){ // Если символ подходит
+         if(selectedstring.substr(left[fstr], 29).length() < 29){ // Если длина текущей строки не превышает ограничение
+            selectedstring.insert(pos, 1, ch);
+            xf += width;
+         }
+         else{ // Если длина текущей строки превышает ограничение
+            selectedstring.insert(pos, 1, ch);
+            left[fstr]++;
+         }
+         length++, f2 = 1;
       }
       if(f_err && f2){
          f_err = 0;
-         rectangle(255, 145, 582, 165), rectangle(255, 115, 582, 135);
+         setcolor(COLOR(2, 224, 202)), rectangle(255, fstr ? 145 : 115, 582, fstr ? 165 : 135), setcolor(BLACK);
+         rectangle(255, fstr ? 115 : 145, 582, fstr ? 135 : 165);
       }
       setfillstyle(SOLID_FILL, WHITE);
       bar(256, fstr ? 146 : 116, 581, fstr ? 164 : 134);
       setfillstyle(SOLID_FILL, LIGHTGRAY);
-      outtextxy(260, fstr ? 147 : 117, selectedstring.c_str()); // Выводим строку
+      outtextxy(260, fstr ? 147 : 117, selectedstring.substr(left[fstr], 29).c_str()); // Выводим строку
       line(xf, fstr ? 147 : 117, xf, fstr ? 162 : 132); // Рисуем каретку
    }
    if(ismouseclick(WM_LBUTTONDOWN)){ // Проверяем, было ли произведено нажатие на ЛКМ
       getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
-      if(xm > buttonbounds[0][0] && xm < buttonbounds[0][2] && ym > buttonbounds[0][1] && ym < buttonbounds[0][3]){ // Если нажат крестик
+      if(xm >= buttonbounds[0][0] && xm <= buttonbounds[0][2] && ym >= buttonbounds[0][1] && ym <= buttonbounds[0][3]){ // Если нажат крестик
          flags[4] = 1, f = 0, fstr = 0;
-         str1 = "", str2 = "", length = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
-         setfillstyle(SOLID_FILL, WHITE);
-         bar(200, 80, 600, 205);
-         setfillstyle(SOLID_FILL, LIGHTGRAY);
-         for(int i = 2; i < 8; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
+         str1 = "", str2 = "", length = 0, left[0] = 0, left[1] = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
+         drawtext();
       }
-      else if(xm > buttonbounds[3][0] && xm < buttonbounds[3][2] && ym > buttonbounds[3][1] && ym < buttonbounds[3][3]){ // Если нажата в районе поля "Что:"
+      else if(xm >= buttonbounds[3][0] && xm <= buttonbounds[3][2] && ym >= buttonbounds[3][1] && ym <= buttonbounds[3][3]){ // Если нажата в районе поля "Что:"
          fstr = 0;
-         setcolor(WHITE), line(xf, 147, xf, 162), setcolor(BLACK); // Стираем каретку
-         outtextxy(260, 117, str1.c_str()); // Выводим строку
-         length = str1.length(), xf = 261 + length * width;
+         setcolor(COLOR(2, 224, 202)), rectangle(255, 115, 582, 135), setcolor(BLACK), rectangle(255, 145, 582, 165);
+         setcolor(WHITE), line(xf, 147, xf, 162), line(xf, 117, xf, 132), setcolor(BLACK); // Стираем каретку
+         outtextxy(260, 117, str1.substr(left[fstr], 29).c_str()); // Выводим строку
+         length = str1.length(); 
+         xm -= (xm - 261) % width;
+         if(xm < 261 + static_cast<int>(str1.substr(left[fstr], 29).length()) * width) xf = xm;
+         else xf = 261 + static_cast<int>(str1.substr(left[fstr], 29).length()) * width;
          line(xf, 117, xf, 132); // Перемещаем каретку
       }
-      else if(xm > buttonbounds[4][0] && xm < buttonbounds[4][2] && ym > buttonbounds[4][1] && ym < buttonbounds[4][3]){ // Если нажата в районе поля "Чем:"
+      else if(xm >= buttonbounds[4][0] && xm <= buttonbounds[4][2] && ym >= buttonbounds[4][1] && ym <= buttonbounds[4][3]){ // Если нажата в районе поля "Чем:"
          fstr = 1;
-         setcolor(WHITE), line(xf, 117, xf, 132), setcolor(BLACK); // Стираем каретку
-         outtextxy(260, 147, str2.c_str()); // Выводим строку
-         length = str2.length(), xf = 261 + length*width;
+         setcolor(COLOR(2, 224, 202)), rectangle(255, 145, 582, 165), setcolor(BLACK), rectangle(255, 115, 582, 135);
+         setcolor(WHITE), line(xf, 117, xf, 132), line(xf, 147, xf, 162), setcolor(BLACK); // Стираем каретку
+         outtextxy(260, 147, str2.substr(left[fstr], 29).c_str()); // Выводим строку
+         length = str2.length(); 
+         xm -= (xm - 261) % width;
+         if(xm < 261 + static_cast<int>(str2.substr(left[fstr], 29).length()) * width) xf = xm;
+         else xf = 261 + static_cast<int>(str2.substr(left[fstr], 29).length()) * width;
          line(xf, 147, xf, 162); // Перемещаем каретку
       }
       else{
@@ -584,10 +841,10 @@ void replacemenu(){
                if(!str1.empty()){ // Если первая строка не пуста
                   switch(i){
                      case 1: // Если нажата кнопка "Заменить все"
-                        replaceall(str1, str2, f, fstr, f_err, length, xf); // Нахождение всех подстрок и их замена
+                        replaceall(str1, str2, f, fstr, f_err, length, left, xf); // Нахождение всех подстрок и их замена
                         break;
                      case 2: // Если нажата кнопка "Заменить"
-                        replace(str1, str2, f, fstr, f_err, length, xf); // Нахождение подстроки и её замена
+                        replace(str1, str2, f, fstr, f_err, length, left, xf); // Нахождение подстроки и её замена
                         break;
                   
                   }
@@ -612,22 +869,18 @@ void replacemenu(){
    }
 } // Подменю "Замена"
 
-void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int &xf){
+void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int (&left)[2], int &xf){
    bool f1 = false; // Флаг, отвечающий за то, найдено ли хоть одно вхождение подстроки в документе
    int strlength1 = str1.size(), strlength2 = str2.size();
-   for(int i = 0; i < max_lines; i++){
+   int docsize = input.size();
+   for(int i = 0; i < docsize; i++){ // Проходим по всем строкам документа
       size_t pos = 0;
       while((pos = input[i].find(str1, pos)) != string::npos){
          if(f1 == false && input[i].size() + ((strlength1 > strlength2) ? (strlength1 - strlength2) : (strlength2 - strlength1)) <= max_length){
             f1 = true;
             input[i].erase(pos, strlength1), input[i].insert(pos, str2); // Заменяем
             xk = (input[i].length() + 1) * width, yk = indent + i * line_height, numline = i; // Перемещаем каретку в конец строки, в которой произошла замена
-            setfillstyle(SOLID_FILL, WHITE);
-            bar(200, 80, 600, 205);
-            bar(0, indent + i * line_height, 800, indent + (i + 1) * line_height);
-            setfillstyle(SOLID_FILL, LIGHTGRAY);
-            for(int j = 2; j < 8 && j != i; j++) outtextxy(width, indent + j * line_height, input[j].c_str()); // Возвращаем текст, перекрытый меню
-            outtextxy(width, indent + i * line_height, input[i].c_str()); // Выводим изменённую строку
+            drawtext();
             break;
          }
          pos += strlength1;
@@ -636,7 +889,7 @@ void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &len
    }
    if(f1){
       flags[4] = 1, f = 0, fstr = 0;
-      str1 = "", str2 = "", length = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
+      str1 = "", str2 = "", length = 0, left[0] = 0, left[1] = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
    }
    else{
       replacemenu();
@@ -647,11 +900,12 @@ void replace(string &str1, string &str2, int &f, int &fstr, int &f_err, int &len
    }
 } // Нахождение подстроки и её замена
 
-void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int &xf){
+void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &length, int (&left)[2], int &xf){
    bool f1 = false; // Флаг, отвечающий за то, было ли произведено хоть одна замена
    int strlength1 = str1.size(), strlength2 = str2.size();
    int last_replaced_string = 0;
-   for(int i = 0; i < max_lines; i++){
+   int docsize = input.size();
+   for(int i = 0; i < docsize; i++){ // Проходим по всем строкам документа
       size_t pos = 0;
       while((pos = input[i].find(str1, pos)) != string::npos){
          if(input[i].size() + ((strlength1 > strlength2) ? (strlength1 - strlength2) : (strlength2 - strlength1)) <= max_length){
@@ -663,12 +917,9 @@ void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &
    }
    if(f1){
       flags[4] = 1, f = 0, fstr = 0;
-      str1 = "", str2 = "", length = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
-      setfillstyle(SOLID_FILL, WHITE);
-      bar(0, 31, 800, 579);
-      setfillstyle(SOLID_FILL, LIGHTGRAY);
+      str1 = "", str2 = "", length = 0, left[0] = 0, left[1] = 0, xf = 261; // Очищаем строки, обнуляем их длину и переносим каретку в начало первой строки
+      drawtext();
       xk = (input[last_replaced_string].length() + 1) * width, yk = indent + last_replaced_string * line_height, numline = last_replaced_string; // Перемещаем каретку в конец строки, в которой произошла последняя замена
-      for(int i = 0; i < max_lines; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст
    }
    else{
       replacemenu();
@@ -680,20 +931,37 @@ void replaceall(string &str1, string &str2, int &f, int &fstr, int &f_err, int &
 } // Нахождение всех подстрок и их замена
 
 void aboutmenu(){
-   flags[2] = 0;
-   clearviewport();
-   while(flags[2] == 0){
-      outtextxy(300, 200, "Текст");
-      if(getch()){ // Проверяем, было ли произведено нажатие клавиши с клавиатуры
-         flags[2] = 1;
-         clearviewport();
-         setcolor(BLACK); // Устанавливаем цвет
-         line(0, 30, 800, 30); line(0, 580, 800, 580); // Рисование линий
-         putimage(0, 0, images[0], COPY_PUT), putimage(56, 0, images[2], COPY_PUT), putimage(136, 0, images[4], COPY_PUT); // Рисуем картинки кнопок
-         for(int i = 0; i < max_lines; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
-         drawtext(); // Вывод последней измененной строки на экран,  количества символов
+   static int state = 0, f = 0; // Начальные состояния и флаг, отвечающий за то, было ли отрисовано меню
+   int buttonbounds[4] = {605, 81, 650, 105};
+   int xm, ym; // Запоминаем координаты места нажатия ЛКМ
+   if(f == 0){
+      flags[2] = 0, f = 1;
+      setfillstyle(SOLID_FILL, WHITE);
+      bar(150, 80, 650, 240);
+      setfillstyle(SOLID_FILL, LIGHTGRAY);
+      rectangle(150, 80, 650, 240); // Отрисовка окна меню
+      outtextxy(160, 90, "Текстовый редактор <Блокнот>");
+      outtextxy(160, 130, "Разработал: Дорофеев Александр Сергеевич");
+      outtextxy(160, 150, "Группа: ЕТ-112");
+      outtextxy(160, 170, "Дисциплина: Методы программирования");
+      outtextxy(160, 190, "Преподаватели: Сартасова М.Ю.");
+      outtextxy(325, 210, "Демидов А.К.");
+      putimage(136, 0, images[4], COPY_PUT), putimage(605, 81, images[14]);
+   }
+   if(ismouseclick(WM_LBUTTONDOWN)){ // Проверяем, было ли произведено нажатие на ЛКМ
+      getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
+      if(xm >= buttonbounds[0] && xm <= buttonbounds[2] && ym >= buttonbounds[1] && ym <= buttonbounds[3]){ // Если нажат крестик
+         flags[2] = 1, f = 0;
+         drawtext();
       }
-      delay(5); // Задержка выполнения цикла
+   }
+   if(x >= buttonbounds[0] && x <= buttonbounds[2] && y >= buttonbounds[1] && y <= buttonbounds[3] && state == 0){
+      state = 1; // Меняем состояние нажатия кнопки
+      putimage(buttonbounds[0], buttonbounds[1], images[15], COPY_PUT); // Заменяем изображение на другое
+   }
+   else if(!(x >= buttonbounds[0] && x <= buttonbounds[2] && y >= buttonbounds[1] && y <= buttonbounds[3]) && state == 1){
+      state = 0; // Меняем состояние нажатия кнопки
+      putimage(buttonbounds[0], buttonbounds[1], images[14], COPY_PUT);  // Восстанавливаем исходное изображение
    }
 } // Меню "О программе"
 
@@ -709,17 +977,24 @@ void exit(){
 
 void exitmenu(){
    static int state[3] = {0, 0, 0}, f = 0; // Начальные состояния и флаг, отвечающий за то, было ли отрисовано меню
-   int buttonbounds[3][4] = {{635, 181, 680, 205}, {270, 240, 390, 260}, {410, 240, 530, 260}}; // Границы под кнопок
+   int buttonbounds[3][4] = {{635, 171, 680, 205}, {270, 240, 390, 260}, {410, 240, 530, 260}}; // Границы под кнопок
    int xm, ym; // Запоминаем координаты места нажатия ЛКМ
+   if(kbhit()) getch(); // Если нажата клавиша с клавиатуры  - считываем её
    if(f == 0){
       flags[5] = 0, f = 1;
       setfillstyle(SOLID_FILL, WHITE);
-      bar(120, 180, 680, 275);
+      bar(120, 170, 680, 275);
       setfillstyle(SOLID_FILL, LIGHTGRAY);
       setcolor(BLACK);
-      rectangle(120, 180, 680, 275); // Отрисовка окна меню
-      putimage(635, 181, images[14]), putimage(270, 240, images[22]), putimage(410, 240, images[24]);
-      outtextxy(130, 210, "Вы хотите сохранить изменения в файле output.txt?"); // выводим сообщение
+      rectangle(120, 170, 680, 275); // Отрисовка окна меню
+      putimage(635, 171, images[14]), putimage(270, 240, images[22]), putimage(410, 240, images[24]);
+      string FILEPATH = DOC_NAME + ".txt?";
+      if(FILEPATH.length() < 55){
+         outtextxy(193, 190, "Вы хотите сохранить изменения в файле"); // выводим сообщение
+         outtextxy(400 - textwidth(FILEPATH.c_str()) / 2, 210, FILEPATH.c_str()); // выводим сообщение
+      }
+      else outtextxy(193, 197, "Вы хотите сохранить изменения в файле?"); // выводим сообщение
+      setcolor(WHITE);
    }
    if(kbhit() && getch() == WINDOW_CLOSE){ // Если открыто меню закрытия и происходит нажатие крестика
       save();
@@ -730,10 +1005,7 @@ void exitmenu(){
       getmouseclick(WM_LBUTTONDOWN, xm, ym); // Запоминаем координаты места нажатия ЛКМ
       if(xm > buttonbounds[0][0] && xm < buttonbounds[0][2] && ym > buttonbounds[0][1] && ym < buttonbounds[0][3]){ // Если нажат крестик
          flags[5] = 1, f = 0;
-         setfillstyle(SOLID_FILL, WHITE);
-         bar(120, 180, 680, 275);
-         setfillstyle(SOLID_FILL, LIGHTGRAY);
-         for(int i = 7; i < 12; i++) outtextxy(width, indent + i * line_height, input[i].c_str()); // Возвращаем текст, перекрытый меню
+         drawtext();
       }
       else{
          for(int i = 1; i < 3; i++){
@@ -770,7 +1042,7 @@ void exitmenu(){
 } // Меню, вызывающееся при закрытии окна пользователем, если файл не сохранён
 
 bool AllFlagsTrue(){
-   for(int i = 0; i < 6; i++){
+   for(int i = 0; i < 7; i++){
       if(flags[i] == false) return false;
    }
    return true;
@@ -795,7 +1067,7 @@ void keyboard_thread(){
       if(AllFlagsTrue()){ // Если не открыто какое-либо из меню и подменю
          if(kbhit()){ // Если нажата клавиша и не открыто какое-либо из меню
             int ch = getch(1); //Запоминаем нажатую клавишу
-            setcolor(WHITE); line(xk, yk, xk, yk + heightk); // Стираем каретку
+            setcolor(WHITE), line(xk, yk, xk, yk + heightk); // Стираем каретку
             HandleInput(ch); // Обработка введенной клавиши, с последующим выводом изменённой строки и количества символов на экран
             line(xk, yk, xk, yk + heightk); // Рисуем каретку
             start_time = clock(); // Обновляем время начала цикла
@@ -810,7 +1082,7 @@ void keyboard_thread(){
             start_time = clock(); // Обновляем время начала цикла
          }
       }
-      else if(kbhit() && flags[3] && flags[4] && flags[5]) getch(); // Если клавиша нажата в каком-либо из меню(в которых происходит считывание нажатия клавиш) - считываем её
+      else if(kbhit() && flags[3] && flags[4] && flags[5] && flags[6]) getch(); // Если клавиша нажата в каком-либо из меню(в которых происходит считывание нажатия клавиш) - считываем её
       delay(5); // Задержка выполнения цикла
    }
 } // Поток по вводу символов с клавиатуры и отображению текстовой каретки
